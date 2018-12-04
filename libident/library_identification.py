@@ -34,6 +34,231 @@ from elftools.common.exceptions import ELFError
 # Local files
 from r2_cfg_wrapper import R2CFGWrapper
 
+import pymongo
+
+class ReferenceDBMongo:
+    """
+    Handles the storage of library version signature data.
+
+    Uses the filesystem to store pickled LibraryFile instances,
+    ordered by the libraryname. Looks like this:
+
+    path/
+      libabc/
+        metadata.json
+        1.2.pickle
+        1.2.{dynstr,rodata,...}.strings
+        1.3.pickle
+        1.3.{dynstr,rodata,...}.strings
+      libxyz/
+        metadata.json
+        3.4.5-bla.pickle
+        3.4.5-bla.{dynstr,rodata,...}.strings
+        1.2.3.4.pickle
+        1.2.3.4.{dynstr,rodata,...}.strings
+
+    The metadata files look like this:
+    {
+      "1.2.3":
+      {
+        "file_hash": "3b854f5e13be0328b7c7701ff679223c72d64550"
+        "strings_sections" :
+          {
+             ".dynstr" : "1.2.3.dynstr.strings",
+             ".rodata" : "1.2.3.rodata.strings"
+          }
+      },
+      ...
+    }
+    """
+
+    METADATA_FILENAME = "metadata.json"
+    STRINGS_EXTENSION = ".strings"
+    PICKLE_EXTENSION = ".pickle"
+
+    def __init__(self, url):
+        try:
+            self.db = pymongo.MongoClient("mongodb://%s/" % url, serverSelectionTimeoutMS = 1000)
+
+            # Try and connect to host
+            self.db.server_info()
+
+        except:
+            raise IOError("DB %s is not responding" % url)
+
+
+    def get_library_names(self):
+        """
+        Returns the list of library names of which
+        we have versions stored
+        """
+        return [f for f in listdir(self.path) if isdir(join(self.path, f))]
+
+
+    def get_library_versions(self, lib_name):
+        """
+        For a given library name, returns the list
+        of versions that we have stored
+        """
+        if not isdir(join(self.path, lib_name)):
+            return []
+        return self.read_metadata(lib_name).keys()
+
+    def read_metadata(self, lib_name):
+        """
+        Read the metadata file for a given library name
+        """
+        with open(join(self.path, lib_name, self.METADATA_FILENAME), "r") as file:
+            return json.load(file)
+
+
+    def update_metadata(self, lib):
+        """
+        Update the metadata file associated with the given libary,
+        creates the metadata file if needed.
+        """
+        fileHash = ReferenceDB.get_file_hash(lib.filename)
+
+        library_db = self.db[join(self.path, lib.name)]
+
+        md = library_db.metadata.find_one()
+
+        if lib.version not in md:
+            md[lib.version] = dict()
+
+        md[lib.version]["file_hash"] = fileHash
+        md[lib.version]["strings_sections"] = {s : "%s%s%s"
+            % (lib.version, s, self.STRINGS_EXTENSION) for s in lib.strs}
+
+        with open(join(self.path, lib.name, self.METADATA_FILENAME), "w") as file:
+            json.dump(md, file, sort_keys=True, indent=4)
+
+
+    def exists_in_db(self, filename):
+        """
+        Returns True if there exists a file in the DB with the same
+        library name and hash as the given file
+        """
+        try:
+            [name, _] = splitext(basename(filename))[0].split('__')
+        except:
+            name = basename(filename)
+
+        if not exists(join(self.path, name, self.METADATA_FILENAME)):
+            return False
+
+        newHash = ReferenceDB.get_file_hash(filename)
+        metadata = self.read_metadata(name)
+
+        # Check all versions of the library, as identified by the filename
+        for version in metadata:
+            if metadata[version]['file_hash'] == newHash:
+                return True
+
+        return False
+
+
+    def write_library(self, lib, gzipped=False):
+        """
+        Writes the given LibraryFile to disk, writes string list to
+        the strings file, and updates metadata
+        """
+
+        library_db = self.db[join(self.path, lib.name)]
+
+        # Write the strings list for every section
+        for section in lib.strs:
+            # HACK: This works out because section names start with a period...
+            sec_strs_path = join(self.path, lib.name, lib.version
+                                 + section + self.STRINGS_EXTENSION)
+
+            section_data = getattr(library_db, sec_strs_path)
+
+            # Divide strings to different collections
+            for x in lib.strs[section]:
+                section_data.insert_one(x.encode('string_escape')
+
+        # Update the metadata file
+        self.update_metadata(lib)
+
+        # Write the LibraryFile pickle itself
+        full_path = join(self.path, lib.name, lib.version + self.PICKLE_EXTENSION)
+        with ReferenceDB.open_file(full_path, "wb", gzipped=gzipped) as file:
+            lib.strs = None
+            pickle.dump(lib, file, -1)
+
+
+    def get_library_strings(self, lib_name, lib_version):
+        def decoded_lines_generator(file):
+            for line in file:
+                # Strip the newline
+                if line[-1] == '\n':
+                    l = line[:-1].decode('string_escape')
+                else:
+                    l = line.decode('string_escape')
+
+                if l != '':
+                    yield l
+
+        strings_sects = self.read_metadata(lib_name)[lib_version]["strings_sections"]
+        strs = dict()
+        for s in strings_sects:
+            sec_strs_path = join(self.path, lib_name, strings_sects[s])
+            with ReferenceDB.open_file(sec_strs_path, "r") as file:
+                strs[s] = list(decoded_lines_generator(file))
+
+        return strs
+
+
+    def load_library(self, lib_name, lib_version, load_strings=True):
+        """
+        Returns the LibraryFile of requested library name
+        and version, or None. Loads the contents of the
+        strings file into .strs if load_strings is True.
+        """
+
+        # Load the LibraryFile
+        full_path = join(self.path, lib_name, lib_version + self.PICKLE_EXTENSION)
+        with ReferenceDB.open_file(full_path, "rb") as file:
+            lib = pickle.load(file)
+            if load_strings:
+                lib.strs = self.get_library_strings(lib_name, lib_version)
+            return lib
+
+
+    @staticmethod
+    def open_file(path, attrs, gzipped=True):
+        """
+        Abstracts away the gzipping.
+        """
+        if gzipped:
+            if "r" in attrs:
+                # Try regular first
+                if exists(path):
+                    return open(path, attrs)
+                else:
+                    return gzip.open(path + ".gz", attrs)
+            else:
+                return gzip.open(path + ".gz", attrs)
+
+        return open(path, attrs)
+
+
+    @staticmethod
+    def get_file_hash(filename):
+        """
+        Returns the SHA1 hash of the given file.
+        """
+
+        hasher = hashlib.sha1()
+        BLOCKSIZE = 65536
+        with open(filename, 'rb') as f:
+            buf = f.read(BLOCKSIZE)
+            while len(buf) > 0:
+                hasher.update(buf)
+                buf = f.read(BLOCKSIZE)
+
+        return hasher.hexdigest()
 
 class ReferenceDB:
     """
