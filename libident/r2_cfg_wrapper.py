@@ -14,7 +14,10 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # System imports
+import os
+import fcntl
 from binascii import crc32
+from subprocess import Popen, PIPE
 
 # Packages
 import r2pipe
@@ -25,8 +28,30 @@ class R2CFGWrapper:
     """
 
     def __init__(self, filename):
+        flags = ["-e io.cache=true"]
+
         # Load the binary
-        self.r2 = r2pipe.open(filename, ["-e io.cache=true"])
+        self.r2 = r2pipe.open(filename, flags)
+
+        # Fix stderr issue with r2pipe
+        if getattr(self.r2, "process") is not None:
+            # self.r2.process.close()
+
+            cmd = ["radare2", "-q0", filename]
+            cmd = cmd[:1] + flags + cmd[1:]
+
+            try:
+                self.r2.process = Popen(cmd, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+            except:
+                raise Exception("ERROR: Cannot find radare2 in PATH")
+
+            self.r2.process.stderr.close()
+            self.r2.process.stdout.read(1)  # Reads initial \x00
+
+            if self.r2.nonblocking:
+                fd = self.r2.process.stdout.fileno()
+                fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
         # Perform analysis
         # TODO: What types of analysis?
