@@ -50,7 +50,8 @@ class R2CFGWrapper:
                 continue
             for b in fbb[0]['blocks']:
                 for i in b['ops']:
-                    fops.append(i['type'])
+                    if 'type' in i:
+                        fops.append(i['type'])
             yield crc32(''.join(fops))
 
 

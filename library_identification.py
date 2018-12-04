@@ -138,11 +138,14 @@ class ReferenceDB:
         Returns True if there exists a file in the DB with the same
         library name and hash as the given file
         """
-        [name, _] = splitext(basename(filename))[0].split('__')
+        try:
+            [name, _] = splitext(basename(filename))[0].split('__')
+        except:
+            name = basename(filename)
 
         if not exists(join(self.path, name, self.METADATA_FILENAME)):
             return False
-            
+
         newHash = ReferenceDB.get_file_hash(filename)
         metadata = self.read_metadata(name)
 

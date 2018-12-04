@@ -36,7 +36,7 @@ from library_identification import ReferenceDB, LibraryFile
 from prime_helpers import difference, primesbelow
 
 # Globals
-debug_enabled = True
+debug_enabled = False
 primes_list = []
 
 
@@ -388,15 +388,8 @@ def benchmark(rdb, sample, refs):
 
     print(t1, t2, t3, t4, t5, t6)
 
-
-def main():
-    """
-    Main entry point. Call with -h to see usage.
-    """
-    global primes_list, debug_enabled
-
     # Mapping of technique short-names to functions
-    techniques = {
+techniques = {
         "str1": compare_strings_concat_levenshtein,
         "str2": compare_strings_set_union,
         "cc1": compare_cc_list_levenshtein,
@@ -405,8 +398,8 @@ def main():
         "bloom": compare_bb_hash_bloomfilter
     }
 
-    # And long names
-    techniques_long = {
+# And long names
+techniques_long = {
         "str1": "Fuzzy string(-list) comparison using Levenshtein distance",
         "str2": "Exact set-based string-list comparison using Jaccard index",
         "cc1": "CC comparison using Levenshtein distance",
@@ -414,6 +407,70 @@ def main():
         "cc3": "CC comparison using Small Prime Products",
         "bloom": "Basic-block hash comparison using Bloom filters"
     }
+
+def identify(sample, reference_db, lr = None, vr = None, t = None):
+    global primes_list
+
+    # Populate the prime list for quick factoring
+    primes_list = primesbelow(16384*4) # Up to and including 65521
+
+    # Set up reference DB
+    rdb = ReferenceDB(reference_db)
+
+    # Generate signature data for the sample file
+    sample = load_sample_file(sample)
+
+    # Try to find a version string, for manual analysis / verification
+    version_strs = ", ".join(LibraryFile.get_version_strings(sample.strs))
+    if version_strs:
+        print("Found version string(s) in file: " + version_strs)
+
+    results = {}
+
+    refsDict = dict()
+    for refName in rdb.get_library_names():
+        # Skip the library if a regex was given and it doesn't match
+        if lr and not re.search(lr, refName):
+            continue
+        versions = rdb.get_library_versions(refName)
+
+        # Filter versions if a version regex was given
+        if vr:
+            versions = filter(lambda v: re.search(vr, v) != None,
+                              versions)
+            if len(versions) == 0:
+                continue
+
+        debug("  %s: %d versions" % (refName, len(versions)))
+        refsDict[refName] = versions
+
+    if len(refsDict) == 0:
+        print("No (matching) libraries/versions in the database, quitting.")
+        return None
+
+    # Load all references
+    all_refs = []
+    for libName in refsDict:
+        for libVersion in refsDict[libName]:
+            ref = rdb.load_library(libName, libVersion)
+            all_refs.append(ref)
+
+    if t:
+        # Perform only the given technique
+        # Run all techniques and print the best matches of all
+        result[t] = perform_compares(sample, all_refs, techniques[t])
+    else:
+        # Run all techniques (in fixed order) and print the best matches of each
+        for tech in ["str1", "str2", "cc1", "cc2", "cc3", "bloom"]:
+            results[tech] = perform_compares(sample, all_refs, techniques[tech])
+
+    return results
+
+def main():
+    """
+    Main entry point. Call with -h to see usage.
+    """
+    global debug_enabled
 
     def valid_technique(s):
         if s in techniques.keys():
@@ -447,61 +504,15 @@ def main():
     if args.q:
         debug_enabled = False
 
-    # Populate the prime list for quick factoring
-    primes_list = primesbelow(16384*4) # Up to and including 65521
-
-    # Set up reference DB
-    rdb = ReferenceDB(args.reference_db)
-
-    # Generate signature data for the sample file
-    sample = load_sample_file(args.sample)
-
-    # Try to find a version string, for manual analysis / verification
-    version_strs = ", ".join(LibraryFile.get_version_strings(sample.strs))
-    if version_strs:
-        print("Found version string(s) in file: " + version_strs)
-
-    # Grab the DB metadata contents
-    debug("Comparing to the following reference libraries:")
-    refsDict = dict()
-    for refName in rdb.get_library_names():
-        # Skip the library if a regex was given and it doesn't match
-        if args.lr and not re.search(args.lr, refName):
-            continue
-        versions = rdb.get_library_versions(refName)
-
-        # Filter versions if a version regex was given
-        if args.vr:
-            versions = filter(lambda v: re.search(args.vr, v) != None,
-                              versions)
-            if len(versions) == 0:
-                continue
-        debug("  %s: %d versions" % (refName, len(versions)))
-        refsDict[refName] = versions
-    if len(refsDict) == 0:
-        print("No (matching) libraries/versions in the database, quitting.")
-        exit(0)
-
-    # Load all references
-    all_refs = []
-    for libName in refsDict:
-        for libVersion in refsDict[libName]:
-            ref = rdb.load_library(libName, libVersion)
-            all_refs.append(ref)
+    results = identify(args.sample, args.reference_db, args.lr, args.vr, args.t)
 
     if args.t:
-        # Perform only the given technique
-        # Run all techniques and print the best matches of all
         print("\n%s. Results:" % techniques_long[args.t])
-        res = perform_compares(sample, all_refs, techniques[args.t])
-        print_best_matches(res, limit=args.n)
+        print_best_matches(results[args.t], limit=args.n)
     else:
-        # Run all techniques (in fixed order) and print the best matches of each
         for tech in ["str1", "str2", "cc1", "cc2", "cc3", "bloom"]:
             print("\n%s. Results:" % techniques_long[tech])
-            res = perform_compares(sample, all_refs, techniques[tech])
-            print_best_matches(res, limit=args.n)
-
+            print_best_matches(results[tech], limit=args.n)
 
 if __name__ == "__main__":
     main()
