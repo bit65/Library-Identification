@@ -133,11 +133,14 @@ class ReferenceDB:
             json.dump(md, file, sort_keys=True, indent=4)
 
 
-    def exists_in_db(self, filename):
+    def exists_in_db(self, filename, realname = None):
         """
         Returns True if there exists a file in the DB with the same
         library name and hash as the given file
         """
+        if realname is not None:
+            tmpname = filename
+            filename = realname
         try:
             [name, _] = splitext(basename(filename))[0].split('__')
         except:
@@ -146,9 +149,15 @@ class ReferenceDB:
         if not exists(join(self.path, name, self.METADATA_FILENAME)):
             return False
 
+        # print "Before get_file_hash"
+        if realname is not None:
+            filename = tmpname
+
         newHash = ReferenceDB.get_file_hash(filename)
+        # print "Before read_metadata"
         metadata = self.read_metadata(name)
 
+        # print "Version check"
         # Check all versions of the library, as identified by the filename
         for version in metadata:
             if metadata[version]['file_hash'] == newHash:
@@ -384,8 +393,12 @@ class LibraryFile:
     ]
 
     def __init__(self, filename):
-        self.filename = filename
-        self.basename = basename(filename)
+        if type(filename) == tuple:
+            self.filename = filename[1]
+            self.basename = basename(filename[0])
+        else:
+            self.filename = filename
+            self.basename = basename(self.filename)
 
         # ELF data
         self.arch = ""

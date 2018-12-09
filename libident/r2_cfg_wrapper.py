@@ -32,7 +32,7 @@ class R2CFGWrapper:
 
         # Load the binary
         self.r2 = r2pipe.open(filename, flags)
-
+        """
         # Fix stderr issue with r2pipe
         if getattr(self.r2, "process") is not None:
             # self.r2.process.close()
@@ -41,24 +41,30 @@ class R2CFGWrapper:
             cmd = cmd[:1] + flags + cmd[1:]
 
             try:
-                self.r2.process = Popen(cmd, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+                self.r2.process = Popen(cmd, shell=False, stdin=PIPE, stdout=PIPE)#, stderr=PIPE)
             except:
                 raise Exception("ERROR: Cannot find radare2 in PATH")
 
-            self.r2.process.stderr.close()
+            #self.r2.process.stderr.close()
+            print "1"
             self.r2.process.stdout.read(1)  # Reads initial \x00
+            print "2"
 
             if self.r2.nonblocking:
                 fd = self.r2.process.stdout.fileno()
                 fl = fcntl.fcntl(fd, fcntl.F_GETFL)
                 fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
+        """
+        print "3"
         # Perform analysis
         # TODO: What types of analysis?
         self.r2.cmd("aaa")
+        print "4"
 
         # Grab the function list
         self.functions = self.r2.cmdj("aflj")
+        print "5"
 
     def get_cyclomatic_complexity_list(self):
         return [f['cc'] for f in self.functions]

@@ -51,16 +51,18 @@ def handle_library(rdb, filename, show_progressbar=False):
     # Load the library
     ref = LibraryFile(filename)
 
-    debug("Generating signature data for %s %s..." % (ref.name, ref.version))
+    # print("Generating signature data for %s %s..." % (ref.name, ref.version))
+    # debug("Generating signature data for %s %s..." % (ref.name, ref.version))
 
     # Generate string list
     ref.grab_signature_strings()
 
-    ref.generate_r2_cfg()
+    #ref.generate_r2_cfg()
     #ref.generate_cfg()
 
     # Save the pickle file and string file
-    debug("Writing out pickle and strings for %s" % ref.basename)
+    #debug("Writing out pickle and strings for %s" % ref.basename)
+    # print("Writing out pickle and strings for %s" % ref.basename)
     rdb.write_library(ref)
 
     # Garbage collect
